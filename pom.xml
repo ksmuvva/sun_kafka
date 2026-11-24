@@ -15,6 +15,8 @@
   <description>Kafka producer/consumer test framework (Spring Boot)</description>
   <properties>
     <java.version>17</java.version>
+    <!-- Boot 3.3 pins 1.19.x, whose Docker client (API 1.32) is rejected by current Docker daemons -->
+    <testcontainers.version>1.21.4</testcontainers.version>
   </properties>
   <dependencies>
     <dependency>
@@ -37,6 +39,16 @@
     <dependency>
       <groupId>org.springframework.kafka</groupId>
       <artifactId>spring-kafka-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>kafka</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
