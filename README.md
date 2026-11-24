@@ -20,6 +20,7 @@ built with Spring Boot + Spring Kafka (Java 17, Maven). Messages are **Avro**, v
 | `OrderMessagingTest` | event delivered; same key stays ordered on one partition; different keys spread across partitions |
 | `DeadLetterTest` | invalid event retried 3x total then dead-lettered; malformed JSON dead-lettered and consumer not blocked |
 | `SchemaRegistryTest` | schema registered under `orders-value`; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
+| `bdd/CucumberTest` | 9 Cucumber (BDD) scenarios over the same behaviour, written in plain Gherkin (see below) |
 | `KafkaContainerTest` | Avro round trip on a real Kafka + real Schema Registry (Testcontainers); auto-skipped without Docker |
 
 ```bash
@@ -34,6 +35,19 @@ redelivery mechanism, not a failure.
 docker compose up -d          # Kafka on :9092, Schema Registry on :8081
 KAFKA_BOOTSTRAP_SERVERS=localhost:9092 SCHEMA_REGISTRY_URL=http://localhost:8081 mvn spring-boot:run
 ```
+
+## BDD (Cucumber)
+Scenarios live in `src/test/resources/features/*.feature` and read as plain English:
+
+| Feature | Scenarios |
+|---|---|
+| `order_messaging.feature` | delivery; same order stays ordered on one partition; different orders spread across partitions |
+| `failure_handling.feature` | invalid order retried then dead-lettered; malformed message dead-lettered without blocking later orders |
+| `schema_evolution.feature` | subject registered; currency defaults to USD; compatible change accepted / breaking change rejected |
+
+Step definitions are in `src/test/java/com/sunkafka/bdd/` and reuse the producer, consumer and `support/` helpers.
+`mvn test` runs them; the HTML report is written to `target/cucumber-reports/report.html` (CI uploads it as the
+`cucumber-report` artifact). To add a scenario, write it in a `.feature` file and add any missing step definition.
 
 ## Evolving the schema
 Edit `OrderEvent.avsc`. A new field **must have a default** (like `currency`) so old data stays readable; the registry
