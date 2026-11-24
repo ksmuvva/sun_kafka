@@ -24,12 +24,12 @@ public class OrderProducer {
 
     /** Keyed by orderId so events for one order stay in one partition (ordering). */
     public CompletableFuture<SendResult<String, OrderEvent>> send(OrderEvent event) {
-        return template.send(topic, event.orderId(), event)
+        return template.send(topic, event.getOrderId(), event)
                 .whenComplete((result, ex) -> {
                     if (ex != null) {
                         log.error("Failed to publish {}", event, ex);
                     } else {
-                        log.info("Published {} to {}-{}@{}", event.orderId(),
+                        log.info("Published {} to {}-{}@{}", event.getOrderId(),
                                 result.getRecordMetadata().topic(),
                                 result.getRecordMetadata().partition(),
                                 result.getRecordMetadata().offset());

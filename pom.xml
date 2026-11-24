@@ -17,7 +17,26 @@
     <java.version>17</java.version>
     <!-- Boot 3.3 pins 1.19.x, whose Docker client (API 1.32) is rejected by current Docker daemons -->
     <testcontainers.version>1.21.4</testcontainers.version>
+    <confluent.version>7.6.1</confluent.version>
+    <avro.version>1.11.3</avro.version>
   </properties>
+  <dependencyManagement>
+    <dependencies>
+      <!-- Avro drags in commons-compress 1.26.0, which needs commons-codec at runtime but does not
+           pull it in; that broke Testcontainers' file copy (NoClassDefFoundError: Charsets). -->
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+        <version>1.27.1</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <repositories>
+    <repository>
+      <id>confluent</id>
+      <url>https://packages.confluent.io/maven/</url>
+    </repository>
+  </repositories>
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -28,8 +47,14 @@
       <artifactId>spring-kafka</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+      <version>${confluent.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>${avro.version}</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -57,6 +82,22 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+      <!-- Generates com.sunkafka.model.OrderEvent from src/main/avro/OrderEvent.avsc -->
+      <plugin>
+        <groupId>org.apache.avro</groupId>
+        <artifactId>avro-maven-plugin</artifactId>
+        <version>${avro.version}</version>
+        <executions>
+          <execution>
+            <phase>generate-sources</phase>
+            <goals><goal>schema</goal></goals>
+            <configuration>
+              <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
+              <stringType>String</stringType>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

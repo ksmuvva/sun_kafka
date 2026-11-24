@@ -14,10 +14,11 @@ public final class OrderEvents {
     }
 
     public static OrderEvent valid(String orderId) {
-        return new OrderEvent(orderId, "alice", 42.5);
+        return withAmount(orderId, 42.5);
     }
 
     public static OrderEvent withAmount(String orderId, double amount) {
-        return new OrderEvent(orderId, "alice", amount);
+        return OrderEvent.newBuilder()
+                .setOrderId(orderId).setCustomer("alice").setAmount(amount).build();
     }
 }

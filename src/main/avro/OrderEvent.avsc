@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "OrderEvent",
+  "namespace": "com.sunkafka.model",
+  "doc": "An order placed by a customer. Published to the 'orders' topic.",
+  "fields": [
+    {"name": "orderId", "type": "string"},
+    {"name": "customer", "type": "string"},
+    {"name": "amount", "type": "double"},
+    {"name": "currency", "type": "string", "default": "USD", "doc": "Added in v2; the default keeps it backward compatible"}
+  ]
+}
