@@ -15,3 +15,10 @@ jobs:
           cache: maven
       # Docker is available on ubuntu-latest, so the Testcontainers test runs against a real broker.
       - run: mvn -B verify
+      # The real-broker test self-skips when Docker is unusable; do not let that pass silently in CI.
+      - name: Fail if the real-broker test was skipped
+        run: |
+          if grep -q '<skipped' target/surefire-reports/TEST-com.sunkafka.KafkaContainerTest.xml; then
+            echo "::error::KafkaContainerTest was skipped (Docker not usable by Testcontainers)"
+            exit 1
+          fi
