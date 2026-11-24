@@ -20,6 +20,17 @@
     <confluent.version>7.6.1</confluent.version>
     <avro.version>1.11.3</avro.version>
   </properties>
+  <dependencyManagement>
+    <dependencies>
+      <!-- Avro drags in commons-compress 1.26.0, which needs commons-codec at runtime but does not
+           pull it in; that broke Testcontainers' file copy (NoClassDefFoundError: Charsets). -->
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+        <version>1.27.1</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
   <repositories>
     <repository>
       <id>confluent</id>
