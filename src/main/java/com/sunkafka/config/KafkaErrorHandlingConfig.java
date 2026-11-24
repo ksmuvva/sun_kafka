@@ -1,6 +1,7 @@
 package com.sunkafka.config;
 
 import com.sunkafka.model.OrderEvent;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.util.Map;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
@@ -17,7 +18,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
-import org.springframework.kafka.support.serializer.JsonSerializer;
 import org.springframework.util.backoff.FixedBackOff;
 
 /**
@@ -37,12 +37,17 @@ public class KafkaErrorHandlingConfig {
 
     @Bean
     DefaultErrorHandler kafkaErrorHandler(KafkaProperties props) {
-        // The DLT may carry raw bytes (poison pills) or OrderEvents, so it needs a type-aware serializer.
+        // The DLT may carry raw bytes (poison pills, i.e. bytes that are not valid Avro) or OrderEvents, so it needs a type-aware serializer.
+        Map<String, Object> producerProps = props.buildProducerProperties(null);
+        // Producers built from instances are not auto-configured, so give the Avro serializer
+        // the Schema Registry URL ourselves.
+        var avro = new KafkaAvroSerializer();
+        avro.configure(producerProps, false);
         Map<Class<?>, Serializer<?>> delegates = Map.of(
                 byte[].class, new ByteArraySerializer(),
-                OrderEvent.class, new JsonSerializer<OrderEvent>());
+                OrderEvent.class, avro);
         var factory = new DefaultKafkaProducerFactory<String, Object>(
-                props.buildProducerProperties(null),
+                producerProps,
                 new StringSerializer(),
                 new DelegatingByTypeSerializer(delegates, true));
         var recoverer = new DeadLetterPublishingRecoverer(new KafkaTemplate<>(factory),

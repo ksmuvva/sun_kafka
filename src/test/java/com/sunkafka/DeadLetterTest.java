@@ -32,7 +32,7 @@ class DeadLetterTest extends KafkaE2ETestBase {
             assertThat(records.get(0).headers().lastHeader("kafka_dlt-exception-fqcn")).isNotNull();
             // 1 initial attempt + 2 retries
             assertThat(consumer.attemptsFor(id)).isEqualTo(3);
-            assertThat(consumer.getReceived()).noneMatch(e -> e.orderId().equals(id));
+            assertThat(consumer.getReceived()).noneMatch(e -> e.getOrderId().equals(id));
         }
     }
 
@@ -54,7 +54,7 @@ class DeadLetterTest extends KafkaE2ETestBase {
                     .contains("{this is not json");
             // consumer is not stuck behind the bad record
             await().atMost(TIMEOUT).untilAsserted(() ->
-                    assertThat(consumer.getReceived()).anyMatch(e -> e.orderId().equals(goodId)));
+                    assertThat(consumer.getReceived()).anyMatch(e -> e.getOrderId().equals(goodId)));
         }
     }
 }

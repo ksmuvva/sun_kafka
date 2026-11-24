@@ -8,8 +8,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 
-/** Shared setup: real Spring context talking to an in-JVM Kafka broker (no Docker needed). */
-@SpringBootTest(properties = "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}")
+/** Shared setup: real Spring context, in-JVM Kafka broker and in-memory Schema Registry (no Docker needed). */
+@SpringBootTest(properties = {
+        "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        // in-memory Schema Registry shared by name with MockSchemaRegistry.getClientForScope("sun-kafka")
+        "spring.kafka.properties.schema.registry.url=mock://sun-kafka"})
 @EmbeddedKafka(partitions = 3, topics = {"orders", "orders.DLT"})
 abstract class KafkaE2ETestBase {
 

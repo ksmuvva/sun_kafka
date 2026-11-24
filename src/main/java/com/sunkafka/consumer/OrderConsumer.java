@@ -29,9 +29,9 @@ public class OrderConsumer {
     @KafkaListener(topics = "${app.topic}")
     public void onMessage(@Payload OrderEvent event,
                           @Header(KafkaHeaders.RECEIVED_PARTITION) int partition) {
-        attempts.computeIfAbsent(event.orderId(), k -> new AtomicInteger()).incrementAndGet();
-        if (event.amount() <= 0) {
-            throw new InvalidOrderException("Order " + event.orderId() + " has non-positive amount");
+        attempts.computeIfAbsent(event.getOrderId(), k -> new AtomicInteger()).incrementAndGet();
+        if (event.getAmount() <= 0) {
+            throw new InvalidOrderException("Order " + event.getOrderId() + " has non-positive amount");
         }
         log.info("Consumed {} from partition {}", event, partition);
         deliveries.add(new Delivery(event, partition));
