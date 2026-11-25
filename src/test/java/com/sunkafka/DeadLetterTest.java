@@ -14,13 +14,13 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 
-/** Failure handling: retries, dead-letter topic, poison pills. */
+/** Failure handling for bad messages: dead-letter topic and poison pills (linking failures: LinkingServiceTest). */
 class DeadLetterTest extends KafkaE2ETestBase {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(20);
 
     @Test
-    void invalidEventIsRetriedThenDeadLettered() {
+    void invalidEventIsDeadLetteredWithoutRetry() {
         var id = uniqueId();
         try (var dlt = new TopicReader(brokers, "orders.DLT")) {
             producer.send(withAmount(id, -5)).join();
@@ -30,8 +30,8 @@ class DeadLetterTest extends KafkaE2ETestBase {
             assertThat(records).hasSize(1);
             assertThat(records.get(0).value()).contains(id);
             assertThat(records.get(0).headers().lastHeader("kafka_dlt-exception-fqcn")).isNotNull();
-            // 1 initial attempt + 2 retries
-            assertThat(consumer.attemptsFor(id)).isEqualTo(3);
+            // validation failures cannot be fixed by retrying: exactly one attempt
+            assertThat(consumer.attemptsFor(id)).isEqualTo(1);
             assertThat(consumer.getReceived()).noneMatch(e -> e.getOrderId().equals(id));
         }
     }

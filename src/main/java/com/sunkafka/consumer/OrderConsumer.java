@@ -1,6 +1,9 @@
 package com.sunkafka.consumer;
 
+import com.sunkafka.linking.LinkingClient;
 import com.sunkafka.model.OrderEvent;
+import com.sunkafka.persistence.ProcessedMessageStore;
+import com.sunkafka.validation.OrderValidator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,13 +29,42 @@ public class OrderConsumer {
     private final List<Delivery> deliveries = new CopyOnWriteArrayList<>();
     private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
 
+    private final OrderValidator validator;
+    private final LinkingClient linkingClient;
+    private final ProcessedMessageStore store;
+
+    public OrderConsumer(OrderValidator validator, LinkingClient linkingClient, ProcessedMessageStore store) {
+        this.validator = validator;
+        this.linkingClient = linkingClient;
+        this.store = store;
+    }
+
+    /**
+     * Validate, call the linking service, then remember the record as processed.
+     * <ul>
+     *   <li>invalid order or permanent linking rejection: not retried, goes to the dead-letter topic</li>
+     *   <li>transient linking failure: retried, then dead-lettered</li>
+     *   <li>record already processed (redelivery): skipped, no second linking call</li>
+     * </ul>
+     */
     @KafkaListener(topics = "${app.topic}")
     public void onMessage(@Payload OrderEvent event,
-                          @Header(KafkaHeaders.RECEIVED_PARTITION) int partition) {
+                          @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+                          @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
+                          @Header(KafkaHeaders.OFFSET) long offset) {
         attempts.computeIfAbsent(event.getOrderId(), k -> new AtomicInteger()).incrementAndGet();
-        if (event.getAmount() <= 0) {
-            throw new InvalidOrderException("Order " + event.getOrderId() + " has non-positive amount");
+        validator.validate(event);
+
+        String messageKey = ProcessedMessageStore.keyOf(topic, partition, offset);
+        if (store.isProcessed(messageKey)) {
+            log.info("Skipping already processed record {}", messageKey);
+            return;
         }
+        // If we crash after this call but before record(), the redelivery calls again; the linking service
+        // de-duplicates with the same Idempotency-Key.
+        linkingClient.link(event, messageKey);
+        store.record(messageKey, event.getOrderId());
+
         log.info("Consumed {} from partition {}", event, partition);
         deliveries.add(new Delivery(event, partition));
     }

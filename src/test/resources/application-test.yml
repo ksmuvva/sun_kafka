@@ -1,0 +1,8 @@
+# Used by all tests that run without Docker: in-memory H2 behaves like Postgres for our simple schema.
+# The database name is random per Spring context: contexts that each have their own embedded Kafka broker must not
+# share the processed_message table (offsets restart at 0 on a new broker, so keys would collide).
+spring:
+  datasource:
+    url: jdbc:h2:mem:${random.uuid};MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""

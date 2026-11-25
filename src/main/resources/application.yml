@@ -1,6 +1,28 @@
 app:
   topic: orders
+linking:
+  # The EU linking service (API not final yet, see docs/REQUIREMENTS.md)
+  base-url: ${LINKING_BASE_URL:http://localhost:8089}
+  connect-timeout: 1s
+  read-timeout: 2s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,kafka,db
 spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/sunkafka}
+    username: ${DB_USERNAME:sunkafka}
+    password: ${DB_PASSWORD:sunkafka}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     properties:

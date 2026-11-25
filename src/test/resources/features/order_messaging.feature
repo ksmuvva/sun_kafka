@@ -3,6 +3,7 @@ Feature: Publishing and consuming orders
   I want every order published to Kafka to be delivered to me
   So that I can process it reliably and in order
 
+  @smoke
   Scenario: A published order is delivered to the consumer
     Given a new order for customer "alice" with amount 42.5
     When the order is published

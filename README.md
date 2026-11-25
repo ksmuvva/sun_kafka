@@ -1,124 +1,139 @@
 # sun_kafka
 
-End-to-end test framework for Kafka messaging: a **publisher** and a **consumer** with retry / dead-letter handling,
-built with Spring Boot + Spring Kafka (Java 17, Maven). Messages are **Avro**, validated by **Confluent Schema Registry**.
-Tests run on an embedded broker (no Docker) and on real Kafka + Schema Registry containers (Testcontainers).
+End-to-end test framework for a service that **consumes orders from Kafka and calls the EU linking service**.
+Built with Spring Boot + Spring Kafka (Java 21, Maven). Messages are **Avro** checked by **Schema Registry**; processed
+records are remembered in **Postgres**. The linking service is faked with WireMock, so everything runs in tests without
+Docker; Docker adds real-broker and real-database checks.
+
+Requirements, gaps and the status of each: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md). Design decisions:
+[docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## How it works
 
 ### 1. The happy path
 ```
-  OrderProducer                    Kafka topic "orders"                   OrderConsumer
-  (KafkaTemplate)                  (3 partitions)                         (@KafkaListener)
-        |                                  |                                    |
-  OrderEvent (Avro class)                  |                                    |
-        |-- key = orderId ---------------> partition = hash(key) % 3            |
-        |-- value = Avro bytes ----------> [magic byte][schema id][payload]     |
-        |        |                                  |                           |
-        |        +--> Schema Registry: schema registered under subject          |
-        |             "orders-value" (first publish) and checked for             |
-        |             compatibility                                              |
-        |                                  |-----------------------------------> deserialize via schema id
-        |                                  |                                     -> OrderEvent -> onMessage()
+ POST /api/orders ──► validate ──┐
+                                 ▼
+  OrderProducer ──► Kafka "orders" (3 partitions) ──► OrderConsumer
+  key = orderId        Avro value + schema id            1. validate (OrderValidator)
+                            │                            2. already processed? skip   (Postgres)
+              Schema Registry checks the schema          3. call linking service       (HTTP, Idempotency-Key)
+                                                         4. remember the record         (Postgres)
 ```
 - **Event** - `src/main/avro/OrderEvent.avsc` is the contract (`orderId`, `customer`, `amount`, `currency`). The Java
-  class `OrderEvent` is *generated from it* at build time; there is no hand-written model.
-- **Producer** - `OrderProducer.send()` keys every record by `orderId`, so all events of one order go to the same
-  partition and stay in order. It uses `acks=all` and idempotence (no loss, no duplicates from retries).
-- **Schema Registry** - the Avro serializer sends only a small schema id with each message; the registry stores the
-  schema and rejects incompatible versions. That is what lets producers and consumers evolve independently.
-- **Consumer** - `OrderConsumer.onMessage()` receives the typed `OrderEvent`. It rejects non-positive amounts (our
-  example of a business rule). It also records what it received so tests can assert on it.
+  class `OrderEvent` is *generated from it* at build time.
+- **Producer** - keys records by `orderId` (same order -> same partition -> in order); `acks=all`, idempotent.
+- **Schema Registry** - messages carry a small schema id; the registry stores schemas and rejects incompatible changes.
+- **Validation** - one place, `OrderValidator`, used by both the consumer and the HTTP endpoint.
+- **Linking service** - `LinkingClient` posts each valid order to `POST /links` with an `Idempotency-Key` header equal to
+  the Kafka record id (`topic-partition-offset`). The real API is not known yet, so path and body are assumptions that
+  live only in this class.
+- **Idempotency** - after a successful link the record id is stored in `processed_message` (Flyway migration
+  `V1__processed_message.sql`). A redelivered record is skipped, so it is not linked twice.
+- **Endpoints** - `POST /api/orders` (202 with the order id, or 400 with the reasons) and `GET /actuator/health`
+  (`kafka` and `db` components) plus `/actuator/health/readiness`.
 
 ### 2. When something goes wrong
-```
-  record fails in onMessage()  --> retry (200 ms apart, 2 retries = 3 attempts total)
-                                       |-- still failing --> published to "orders.DLT" (same partition,
-                                       |                     exception details in the record headers)
-  bytes that are not valid Avro --> no retries, straight to "orders.DLT"
-```
-- Configured in `KafkaErrorHandlingConfig` (`DefaultErrorHandler` + `DeadLetterPublishingRecoverer`).
-- Un-deserializable "poison pills" are caught by `ErrorHandlingDeserializer`, so one bad message cannot stall the
-  partition; later good messages are still consumed.
-- The `Seek to current after exception` ERROR lines in the test log are Spring's normal redelivery mechanism, not
-  failures.
+| What failed | What happens |
+|---|---|
+| Order breaks a validation rule | **No retry.** Straight to `orders.DLT` |
+| Linking service answers 4xx (e.g. 400) | **No retry.** Straight to `orders.DLT` |
+| Linking service answers 5xx, 408, 429, times out, or is unreachable | Retried 2 more times (200 ms apart, 3 attempts total), then `orders.DLT` |
+| Message is not valid Avro (poison pill) | **No retry.** Straight to `orders.DLT`; later messages are not blocked |
+
+Dead-lettered records keep the exception details in their headers. Rules live in `KafkaErrorHandlingConfig`. The
+`Seek to current after exception` ERROR lines in test logs are Spring's normal redelivery mechanism, not failures.
 
 ### 3. How the tests are built
-| Layer | What it uses | Needs Docker? |
+| Layer | Broker / registry / database / linking service | Docker? |
 |---|---|---|
-| JUnit E2E tests (`OrderMessagingTest`, `DeadLetterTest`, `SchemaRegistryTest`) | `@EmbeddedKafka` (a real Kafka broker inside the test JVM) + `mock://` in-memory Schema Registry, via `KafkaE2ETestBase` | No |
-| Cucumber BDD (`bdd/CucumberTest`) | the same embedded setup, scenarios written in Gherkin | No |
-| `KafkaContainerTest` | Testcontainers: real `cp-kafka` + real `cp-schema-registry` | Yes (auto-skipped without it) |
+| JUnit E2E tests, Cucumber BDD | `@EmbeddedKafka` (real Kafka inside the test JVM), in-memory `mock://` Schema Registry, in-memory H2 (Postgres mode), WireMock | No |
+| `KafkaContainerTest` | real `cp-kafka` + `cp-schema-registry` containers (Testcontainers) | Yes |
+| `PostgresMigrationTest` | real `postgres` container: runs the Flyway migrations and the store | Yes |
 
-A typical test: **publish** an event through the real `OrderProducer` -> the embedded broker carries it -> the real
-`OrderConsumer` receives it -> the test **awaits** (Awaitility) and asserts. For dead letters, `TopicReader` is an
-independent raw consumer that reads `orders.DLT` to prove the message landed there.
-
-The whole application code runs unchanged in every layer; only the broker and registry underneath differ. CI also
-fails if `KafkaContainerTest` is skipped, so the real-broker check cannot silently disappear.
+The two Docker tests skip themselves when Docker is missing; **CI fails if either is skipped**. The same application
+code runs in every layer; only what sits underneath changes.
 
 ## Layout
 | Path | Purpose |
 |---|---|
-| `src/main/avro/OrderEvent.avsc` | The event schema; `OrderEvent` Java class is generated from it at build time |
-| `producer/OrderProducer` | Publishes Avro `OrderEvent` keyed by `orderId` (`acks=all`, idempotent) |
-| `consumer/OrderConsumer` | `@KafkaListener` on `orders`; rejects non-positive amounts |
-| `config/KafkaTopicConfig` | `orders` topic (3 partitions) |
-| `config/KafkaErrorHandlingConfig` | 2 retries (200 ms), then publish to `orders.DLT`; poison pills (bytes that are not valid Avro) skip retries |
-| `src/main/resources/application.yml` | Topic name, serializers, `KAFKA_BOOTSTRAP_SERVERS` and `SCHEMA_REGISTRY_URL` settings |
-| `test/.../support/` | Reusable helpers: `OrderEvents` (builders), `TopicReader` (raw consumer for any topic) |
-| `test/.../KafkaE2ETestBase` | Spring context + embedded broker + mock registry shared by the JUnit E2E tests |
-| `test/.../bdd/` | Cucumber runner, Spring wiring and step definitions |
-| `src/test/resources/features/` | The Gherkin `.feature` files |
-| `docker-compose.yml` | Local Kafka + Schema Registry for running the app by hand |
-| `.github/workflows/ci.yml` | CI: `mvn verify`, real-broker-skipped guard, Cucumber report upload |
+| `src/main/avro/OrderEvent.avsc` | The event schema |
+| `producer/`, `consumer/` | `OrderProducer`; `OrderConsumer` (validate, link, remember) |
+| `linking/` | `LinkingClient` and its two failure types (transient / permanent) |
+| `validation/OrderValidator` | The business rules |
+| `persistence/ProcessedMessageStore` + `db/migration/` | Idempotency store and Flyway migrations |
+| `web/OrderController`, `health/KafkaHealthIndicator` | HTTP endpoint and Kafka health check |
+| `config/` | Topics (`orders`, `orders.DLT`) and the error handler |
+| `src/main/resources/application.yml` | All settings; environment variables listed below |
+| `test/.../support/` | `OrderEvents` (builders), `TopicReader` (raw consumer), `LinkingStub` (fake linking service) |
+| `test/.../KafkaE2ETestBase` | Shared Spring + embedded broker setup for JUnit tests |
+| `test/.../bdd/`, `src/test/resources/features/` | Cucumber runner, steps and Gherkin features |
+| `docker-compose.yml` | Local Kafka + Schema Registry + Postgres |
+| `.github/workflows/ci.yml`, `.github/dependabot.yml` | CI and weekly dependency updates |
 
 ## Test suites
 | Test | Proves |
 |---|---|
-| `OrderMessagingTest` | event delivered; same key stays ordered on one partition; different keys spread across partitions |
-| `DeadLetterTest` | invalid event retried 3x total then dead-lettered; malformed (non-Avro) message dead-lettered and consumer not blocked |
-| `SchemaRegistryTest` | schema registered under `orders-value`; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
-| `bdd/CucumberTest` | 9 Cucumber (BDD) scenarios over the same behaviour, written in plain Gherkin (see below) |
-| `KafkaContainerTest` | Avro round trip on a real Kafka + real Schema Registry (Testcontainers); auto-skipped without Docker |
+| `OrderMessagingTest` | delivered; same key ordered on one partition; keys spread across partitions |
+| `LinkingServiceTest` | exactly one call with an idempotency key; 503 and 429 retried then dead-lettered; 400 not retried; a slow service times out; recovery after a temporary failure; a failing order does not block later ones; a redelivered record is not linked twice |
+| `DeadLetterTest` | invalid order dead-lettered without retry; non-Avro message dead-lettered without blocking the consumer |
+| `ValidationTest` | every validation rule, and that all problems are reported together |
+| `EndpointTest` | order accepted and flows through Kafka to the linking service; invalid, malformed and wrong-type requests rejected |
+| `HealthTest` | health and readiness UP with `kafka` and `db`; Kafka indicator DOWN when unreachable |
+| `SchemaRegistryTest` | subject `orders-value` registered; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
+| `bdd/CucumberTest` | 14 Gherkin scenarios (see below) |
+| `KafkaContainerTest`, `PostgresMigrationTest` | the same behaviour on real Kafka, Schema Registry and Postgres |
 
 ```bash
-mvn test        # embedded broker + in-memory (mock://) Schema Registry, no Docker needed
-mvn verify      # same, plus the real-broker test if Docker is running
+mvn test        # everything except the Docker tests (they skip themselves)
+mvn verify      # + Docker tests if Docker is running, + coverage report and 80% line-coverage gate
 ```
-
-## Run the app against a local broker
-```bash
-docker compose up -d          # Kafka on :9092, Schema Registry on :8081
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092 SCHEMA_REGISTRY_URL=http://localhost:8081 mvn spring-boot:run
-```
-Note: the `docker-compose.yml` setup has not been run by the authors yet (no Docker was available when it was written).
+Coverage report: `target/site/jacoco/index.html`. Cucumber report: `target/cucumber-reports/report.html`.
 
 ## BDD (Cucumber)
-Scenarios live in `src/test/resources/features/*.feature` and read as plain English:
+Scenarios in `src/test/resources/features/*.feature`, step code in `src/test/java/com/sunkafka/bdd/`:
 
 | Feature | Scenarios |
 |---|---|
-| `order_messaging.feature` | delivery; same order stays ordered on one partition; different orders spread across partitions |
-| `failure_handling.feature` | invalid order retried then dead-lettered; malformed message dead-lettered without blocking later orders |
-| `schema_evolution.feature` | subject registered; currency defaults to USD; compatible change accepted / breaking change rejected |
+| `order_messaging` | delivery; same order stays ordered on one partition; orders spread across partitions |
+| `linking_service` | exactly one call; temporary failure retried; persistent failure dead-lettered after retries; rejection not retried; redelivered record not linked twice |
+| `failure_handling` | invalid order dead-lettered immediately; malformed message does not block later orders |
+| `schema_evolution` | subject registered; currency defaults to USD; compatible change accepted / breaking change rejected |
 
-Step definitions are in `src/test/java/com/sunkafka/bdd/` and reuse the producer, consumer and `support/` helpers.
-`mvn test` runs them; the HTML report is written to `target/cucumber-reports/report.html` (CI uploads it as the
-`cucumber-report` artifact).
+Run a subset by tag, e.g. `mvn test -Dtest=CucumberTest -Dcucumber.filter.tags=@smoke`.
+
+## Run the app against local services
+```bash
+docker compose up -d          # Kafka :9092, Schema Registry :8081, Postgres :5432  (or: podman compose up -d)
+mvn spring-boot:run
+```
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka |
+| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Schema Registry |
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | local Postgres, `sunkafka` | Database (defaults are for local use only) |
+| `LINKING_BASE_URL` | `http://localhost:8089` | EU linking service |
+
+**Not verified yet:** `docker-compose.yml` has never been run (no Docker or Podman was available when it was written),
+and nothing has been run under Podman. For Podman, expect to need: `unqualified-search-registries = ["docker.io"]` in
+`registries.conf` (short image names), and for Testcontainers `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
+and `TESTCONTAINERS_RYUK_DISABLED=true`.
 
 ## Extending the framework
-- **Add a scenario**: write it in a `.feature` file; add any missing step in `bdd/*Steps.java`.
-- **Add a JUnit test**: extend `KafkaE2ETestBase` (gives you `producer`, `consumer`, `brokers`); build data with
-  `OrderEvents`; use Awaitility to wait for the consumer.
+- **New scenario**: write it in a `.feature` file; add any missing step in `bdd/*Steps.java`.
+- **New JUnit test**: extend `KafkaE2ETestBase` (gives `producer`, `consumer`, `store`, `brokers`); build data with
+  `OrderEvents`; script the linking service with `LinkingStub`; wait with Awaitility.
 - **Change the event**: edit `OrderEvent.avsc`. A new field **must have a default** (like `currency`) so old data stays
-  readable; the registry rejects breaking changes (see `SchemaRegistryTest.schemaEvolutionRulesAreEnforced`).
-- **Change retry behaviour**: `KafkaErrorHandlingConfig` (`FixedBackOff(200L, 2L)` = 200 ms apart, 2 retries).
-- **Add a new topic or event type**: add a `NewTopic` bean, a schema, a producer and a `@KafkaListener`, then reuse the
-  same test base and helpers.
+  readable; the registry rejects breaking changes.
+- **Change the linking contract**: edit `LinkingClient` only (path, body, headers, which statuses are retryable).
+- **Change retry behaviour**: `KafkaErrorHandlingConfig` (`FixedBackOff(200L, 2L)`, non-retryable exception list).
+- **Switch schema registry** (e.g. to AWS Glue Schema Registry, which has a different message format): change the
+  serializer/deserializer classes and registry settings in `application.yml` and the dependency in `pom.xml`. The
+  dead-letter publisher follows `spring.kafka.producer.value-serializer`. Not tried with Glue yet.
 
-## Build note
-The Confluent Avro serializer is published only on `https://packages.confluent.io/maven/` (declared in `pom.xml`).
-If your network blocks that host the build cannot resolve dependencies.
-
-CI (`.github/workflows/ci.yml`) runs `mvn verify` on every push to `main` and every PR.
+## Build notes
+- The Confluent Avro serializer is published only on `https://packages.confluent.io/maven/` (declared in `pom.xml`); a
+  network that blocks that host cannot resolve dependencies.
+- `commons-compress` is pinned in `pom.xml` because the version Avro pulls in breaks Testcontainers.
+- Tests that start their own Spring context get their own database (random name), because each embedded Kafka broker
+  restarts offsets at 0 and the idempotency keys would otherwise collide across contexts.

@@ -6,11 +6,13 @@ import static org.awaitility.Awaitility.await;
 
 import com.sunkafka.consumer.OrderConsumer;
 import com.sunkafka.producer.OrderProducer;
+import com.sunkafka.support.LinkingStub;
 import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -25,7 +27,8 @@ import org.testcontainers.utility.DockerImageName;
  * Same round trip against a REAL Kafka broker and a REAL Schema Registry.
  * Skipped automatically when Docker is unavailable (CI fails if that happens).
  */
-@SpringBootTest
+@SpringBootTest(properties = {"linking.connect-timeout=500ms", "linking.read-timeout=500ms"})
+@ActiveProfiles("test")
 @Testcontainers(disabledWithoutDocker = true)
 class KafkaContainerTest {
 
@@ -55,6 +58,7 @@ class KafkaContainerTest {
     static void kafkaProps(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
         registry.add("spring.kafka.properties.schema.registry.url", KafkaContainerTest::registryUrl);
+        registry.add("linking.base-url", LinkingStub::baseUrl);
     }
 
     @Autowired OrderProducer producer;
@@ -62,6 +66,7 @@ class KafkaContainerTest {
 
     @Test
     void avroRoundTripAgainstRealBrokerAndRegistry() throws Exception {
+        LinkingStub.reset();
         var event = valid(uniqueId());
 
         producer.send(event).join();

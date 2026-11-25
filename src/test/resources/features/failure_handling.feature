@@ -1,11 +1,11 @@
 Feature: Failure handling
   Bad messages must never block good ones, and must never disappear silently
 
-  Scenario: An invalid order is retried and then dead-lettered
+  Scenario: An invalid order is dead-lettered immediately without retries
     Given an order with a non-positive amount of -5
     When the invalid order is published
     Then it lands on the dead-letter topic within 20 seconds
-    And the listener tried it 3 times
+    And the listener tried it 1 time
     And it was never consumed successfully
 
   Scenario: A malformed message is dead-lettered without blocking later orders
