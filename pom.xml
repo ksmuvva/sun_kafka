@@ -18,7 +18,7 @@
     <!-- Boot 3.3 pins 1.19.x, whose Docker client (API 1.32) is rejected by current Docker daemons -->
     <testcontainers.version>1.21.4</testcontainers.version>
     <confluent.version>7.6.1</confluent.version>
-    <avro.version>1.11.3</avro.version>
+    <avro.version>1.12.2</avro.version>
     <cucumber.version>7.18.1</cucumber.version>
   </properties>
   <dependencyManagement>
