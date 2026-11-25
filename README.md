@@ -1,6 +1,6 @@
 # sun_kafka
 
-End-to-end test framework for a service that **consumes orders from Kafka and calls the EU linking service**.
+End-to-end test framework for a service that **consumes orders from Kafka and calls the  linking service**.
 Built with Spring Boot + Spring Kafka (Java 21, Maven). Messages are **Avro** checked by **Schema Registry**; processed
 records are remembered in **Postgres**. The linking service is faked with WireMock, so everything runs in tests without
 Docker; Docker adds real-broker and real-database checks.
