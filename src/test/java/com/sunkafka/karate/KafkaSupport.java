@@ -135,6 +135,12 @@ public final class KafkaSupport {
         } catch (org.awaitility.core.ConditionTimeoutException ignored) {
             // report whatever arrived; the feature's own match decides pass or fail
         }
+        // Let stragglers arrive (retries are 200 ms apart) so "exactly N calls" cannot pass just before call N+1.
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         var calls = new ArrayList<Map<String, Object>>();
         for (LoggedRequest request : LinkingStub.requestsFor(orderId)) {
             try {
