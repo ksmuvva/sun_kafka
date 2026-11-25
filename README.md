@@ -1,158 +1,221 @@
 # Karate_kafka
 
-End-to-end test framework for a service that **consumes orders from Kafka and calls the  linking service**.
-Built with Spring Boot + Spring Kafka (Java 21, Maven). Messages are **Avro** checked by **Schema Registry**; processed
-records are remembered in **Postgres**. The linking service is faked with WireMock, so everything runs in tests without
-Docker; Docker adds real-broker and real-database checks.
+A proof of concept that uses the **Karate** test framework (Cucumber-style `Given / When / Then` files, running on Java
+and JUnit 5) to check a **Kafka producer, a Kafka consumer, and the whole event flow end to end**.
 
-Requirements, gaps and the status of each: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md). Design decisions:
-[docs/DECISIONS.md](docs/DECISIONS.md).
+The service under test takes an order, puts it on Kafka as an Avro message, reads it back, and calls a downstream
+"linking service". Karate tests it from the outside, the way a real client would. **You do not need to install Kafka,
+Docker or a database**: the test starts everything it needs, inside the test run, on your machine.
 
-## How it works
-
-### 1. The happy path
 ```
- POST /api/orders ──► validate ──┐
-                                 ▼
-  OrderProducer ──► Kafka "orders" (3 partitions) ──► OrderConsumer
-  key = orderId        Avro value + schema id            1. validate (OrderValidator)
-                            │                            2. already processed? skip   (Postgres)
-              Schema Registry checks the schema          3. call linking service       (HTTP, Idempotency-Key)
-                                                         4. remember the record         (Postgres)
+ Karate test ──HTTP──► app: POST /api/orders ──► Kafka "orders" ──► consumer ──► linking service (fake)
+      │                                              ▲                │
+      └── publishes/reads Kafka directly ────────────┘                └──► "orders.DLT" (dead-letter topic) on failure
 ```
-- **Event** - `src/main/avro/OrderEvent.avsc` is the contract (`orderId`, `customer`, `amount`, `currency`). The Java
-  class `OrderEvent` is *generated from it* at build time.
-- **Producer** - keys records by `orderId` (same order -> same partition -> in order); `acks=all`, idempotent.
-- **Schema Registry** - messages carry a small schema id; the registry stores schemas and rejects incompatible changes.
-- **Validation** - one place, `OrderValidator`, used by both the consumer and the HTTP endpoint.
-- **Linking service** - `LinkingClient` posts each valid order to `POST /links` with an `Idempotency-Key` header equal to
-  the Kafka record id (`topic-partition-offset`). The real API is not known yet, so path and body are assumptions that
-  live only in this class.
-- **Idempotency** - after a successful link the record id is stored in `processed_message` (Flyway migration
-  `V1__processed_message.sql`). A redelivered record is skipped, so it is not linked twice.
-- **Endpoints** - `POST /api/orders` (202 with the order id, or 400 with the reasons) and `GET /actuator/health`
-  (`kafka` and `db` components) plus `/actuator/health/readiness`.
 
-### 2. When something goes wrong
-| What failed | What happens |
-|---|---|
-| Order breaks a validation rule | **No retry.** Straight to `orders.DLT` |
-| Linking service answers 4xx (e.g. 400) | **No retry.** Straight to `orders.DLT` |
-| Linking service answers 5xx, 408, 429, times out, or is unreachable | Retried 2 more times (200 ms apart, 3 attempts total), then `orders.DLT` |
-| Message is not valid Avro (poison pill) | **No retry.** Straight to `orders.DLT`; later messages are not blocked |
+**What you will do in this README:** run the tests (steps 1 to 3), understand them (4), run one feature (5), make a test
+fail on purpose (6), write your own (7), and run everything (8). About 15 minutes.
 
-Dead-lettered records keep the exception details in their headers. Rules live in `KafkaErrorHandlingConfig`. The
-`Seek to current after exception` ERROR lines in test logs are Spring's normal redelivery mechanism, not failures.
+---
 
-### 3. How the tests are built
-| Layer | Broker / registry / database / linking service | Docker? |
+## Before you start
+
+| You need | Version | Check with |
 |---|---|---|
-| JUnit E2E tests, Cucumber BDD | `@EmbeddedKafka` (real Kafka inside the test JVM), in-memory `mock://` Schema Registry, in-memory H2 (Postgres mode), WireMock | No |
-| `KafkaContainerTest` | real `cp-kafka` + `cp-schema-registry` containers (Testcontainers) | Yes |
-| `PostgresMigrationTest` | real `postgres` container: runs the Flyway migrations and the store | Yes |
+| Java (JDK) | **21** | `java -version` |
+| Maven | 3.9 or newer | `mvn -version` |
+| Git | any | `git --version` |
+| Internet, first run only | to download dependencies from Maven Central and `packages.confluent.io` | |
 
-The two Docker tests skip themselves when Docker is missing; **CI fails if either is skipped**. The same application
-code runs in every layer; only what sits underneath changes.
+Not needed: Docker, Kafka, a database, any open port (everything uses random ports). Tested on Linux with Java 21.0.13 and
+Maven 3.9.11; macOS and Windows were not tested.
 
-## Layout
-| Path | Purpose |
-|---|---|
-| `src/main/avro/OrderEvent.avsc` | The event schema |
-| `producer/`, `consumer/` | `OrderProducer`; `OrderConsumer` (validate, link, remember) |
-| `linking/` | `LinkingClient` and its two failure types (transient / permanent) |
-| `validation/OrderValidator` | The business rules |
-| `persistence/ProcessedMessageStore` + `db/migration/` | Idempotency store and Flyway migrations |
-| `web/OrderController`, `health/KafkaHealthIndicator` | HTTP endpoint and Kafka health check |
-| `config/` | Topics (`orders`, `orders.DLT`) and the error handler |
-| `src/main/resources/application.yml` | All settings; environment variables listed below |
-| `test/.../support/` | `OrderEvents` (builders), `TopicReader` (raw consumer), `LinkingStub` (fake linking service) |
-| `test/.../KafkaE2ETestBase` | Shared Spring + embedded broker setup for JUnit tests |
-| `test/.../bdd/`, `src/test/resources/features/` | Cucumber runner, steps and Gherkin features |
-| `docker-compose.yml` | Local Kafka + Schema Registry + Postgres |
-| `.github/workflows/ci.yml`, `.github/dependabot.yml` | CI and weekly dependency updates |
+---
 
-## Test suites
-| Test | Proves |
-|---|---|
-| `OrderMessagingTest` | delivered; same key ordered on one partition; keys spread across partitions |
-| `LinkingServiceTest` | exactly one call with an idempotency key; 503 and 429 retried then dead-lettered; 400 not retried; a slow service times out; recovery after a temporary failure; a failing order does not block later ones; a redelivered record is not linked twice |
-| `DeadLetterTest` | invalid order dead-lettered without retry; non-Avro message dead-lettered without blocking the consumer |
-| `ValidationTest` | every validation rule, and that all problems are reported together |
-| `EndpointTest` | order accepted and flows through Kafka to the linking service; invalid, malformed and wrong-type requests rejected |
-| `HealthTest` | health and readiness UP with `kafka` and `db`; Kafka indicator DOWN when unreachable |
-| `SchemaRegistryTest` | subject `orders-value` registered; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
-| `bdd/CucumberTest` | 14 Gherkin scenarios (see below) |
-| `karate/KarateTest` | Karate proof of concept: 9 scenarios against the running app ([guide](docs/KARATE-GUIDE.md), [results](docs/KARATE-POC-RESULTS.md)) |
-| `KafkaContainerTest`, `PostgresMigrationTest` | the same behaviour on real Kafka, Schema Registry and Postgres |
+## Step 1: Get the code
 
 ```bash
-mvn test        # everything except the Docker tests (they skip themselves)
-mvn verify      # + Docker tests if Docker is running, + coverage report and 80% line-coverage gate
+git clone https://github.com/ksmuvva/sun_kafka
+cd sun_kafka
 ```
-Coverage report: `target/site/jacoco/index.html`. Cucumber report: `target/cucumber-reports/report.html`.
 
-## BDD (Cucumber)
-Scenarios in `src/test/resources/features/*.feature`, step code in `src/test/java/com/sunkafka/bdd/`:
-
-| Feature | Scenarios |
-|---|---|
-| `order_messaging` | delivery; same order stays ordered on one partition; orders spread across partitions |
-| `linking_service` | exactly one call; temporary failure retried; persistent failure dead-lettered after retries; rejection not retried; redelivered record not linked twice |
-| `failure_handling` | invalid order dead-lettered immediately; malformed message does not block later orders |
-| `schema_evolution` | subject registered; currency defaults to USD; compatible change accepted / breaking change rejected |
-
-Run a subset by tag, e.g. `mvn test -Dtest=CucumberTest -Dcucumber.filter.tags=@smoke`.
-
-## Karate (proof of concept)
-[Karate](https://github.com/karatelabs/karate) is an API-testing framework with Gherkin-like syntax. The PoC runs the
-real application on a random port (same embedded Kafka, in-memory registry and database as the other tests) and checks
-the whole event flow: HTTP -> Kafka -> consumer -> linking service, plus the failure paths. 9 scenarios, no Docker needed.
+## Step 2: Run the Karate tests
 
 ```bash
-mvn test -Dtest=KarateTest        # report: target/karate-reports/karate-summary.html
+mvn test -Dtest=KarateTest
 ```
 
-- **How to use and extend it:** [docs/KARATE-GUIDE.md](docs/KARATE-GUIDE.md)
-- **What it measured:** [docs/KARATE-POC-RESULTS.md](docs/KARATE-POC-RESULTS.md) (9/9 passing, deliberate-breakage checks, one test-helper bug found and fixed)
+The first run downloads dependencies and can take several minutes. After that it takes about 40 seconds.
 
-## Run the app against local services
-```bash
-docker compose up -d          # Kafka :9092, Schema Registry :8081, Postgres :5432  (or: podman compose up -d)
-mvn spring-boot:run
+You will see **a lot of log lines** (a Kafka broker starting, the application starting). That is normal, and so are lines
+containing `ERROR ... Seek to current after exception`: that is the consumer retrying a message on purpose.
+
+**It worked if the end of the output contains these lines:**
+
 ```
-| Environment variable | Default | Meaning |
+scenarios:  4 | passed:  4 | failed:  0 | time: ...
+scenarios:  5 | passed:  5 | failed:  0 | time: ...
+...
+features:     2 | skipped:    0 | efficiency: ...
+scenarios:    9 | passed:     9 | failed: 0
+...
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, ...
+[INFO] BUILD SUCCESS
+```
+
+## Step 3: Open the report
+
+Open this file in a web browser:
+
+```
+target/karate-reports/karate-summary.html
+```
+
+Click a feature to see every scenario, every step, and each HTTP request and response. `karate-timeline.html` (same
+folder) shows when each scenario ran.
+
+## Step 4: Understand what ran
+
+Two feature files in `src/test/resources/karate/`, 9 scenarios:
+
+| Feature | Scenario | What it proves |
 |---|---|---|
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka |
-| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Schema Registry |
-| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | local Postgres, `sunkafka` | Database (defaults are for local use only) |
-| `LINKING_BASE_URL` | `http://localhost:8089` | EU linking service |
+| `orders-e2e` | An order posted over HTTP is published to Kafka and linked exactly once | **Producer:** the HTTP request becomes an Avro event on the `orders` topic (default currency `USD` applied). **End to end:** the consumer then calls the linking service once, with an idempotency key |
+| `orders-e2e` | The service reports healthy | `/actuator/health` shows `UP`, including Kafka and the database |
+| `orders-e2e` | Invalid order: negative amount / zero amount / blank customer (3 rows of one table) | The service answers **400** with the reason and **nothing reaches Kafka** |
+| `kafka-consumer` | An order published straight to Kafka is linked exactly once | **Consumer:** Karate publishes to Kafka itself, and the consumer calls the linking service once |
+| `kafka-consumer` | A temporary linking failure is retried, then dead-lettered | The linking service answers 503: the consumer tries 3 times, then the order lands on `orders.DLT` |
+| `kafka-consumer` | A rejected order is dead-lettered without retries | The linking service answers 400: 1 attempt, then `orders.DLT` |
+| `kafka-consumer` | A malformed message is dead-lettered and does not block the next order | Garbage bytes go to `orders.DLT`; the order after it is still processed |
 
-**Not verified yet:** `docker-compose.yml` has never been run (no Docker or Podman was available when it was written),
-and nothing has been run under Podman. For Podman, expect to need: `unqualified-search-registries = ["docker.io"]` in
-`registries.conf` (short image names), and for Testcontainers `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
-and `TESTCONTAINERS_RYUK_DISABLED=true`.
+How it runs: `KarateTest.java` starts the real application on a random port, with an embedded Kafka broker, an in-memory
+Schema Registry and database, and a fake linking service (WireMock). It then runs every feature. The features talk
+to the app over HTTP, and to Kafka through a small Java helper (`KafkaSupport.java`), because Karate has no built-in
+Kafka support that I found.
 
+## Step 5: Run just one feature
 
-The graphify hooks in `.claude/settings.json` do nothing unless `graphify` is installed **and** `graphify-out/graph.json`
-exists; they only print hints before searches. To remove graphify: `graphify uninstall`, then delete its entries from
-`.claude/settings.json` and the section in `CLAUDE.md`. To drop Ponytail: remove the two `ponytail` entries from
-`.claude/settings.json`.
+```bash
+mvn test -Dtest=KarateTest -Dkarate.options="classpath:karate/kafka-consumer.feature"
+```
 
-## Extending the framework
-- **New scenario**: write it in a `.feature` file; add any missing step in `bdd/*Steps.java`.
-- **New JUnit test**: extend `KafkaE2ETestBase` (gives `producer`, `consumer`, `store`, `brokers`); build data with
-  `OrderEvents`; script the linking service with `LinkingStub`; wait with Awaitility.
-- **Change the event**: edit `OrderEvent.avsc`. A new field **must have a default** (like `currency`) so old data stays
-  readable; the registry rejects breaking changes.
-- **Change the linking contract**: edit `LinkingClient` only (path, body, headers, which statuses are retryable).
-- **Change retry behaviour**: `KafkaErrorHandlingConfig` (`FixedBackOff(200L, 2L)`, non-retryable exception list).
-- **Switch schema registry** (e.g. to AWS Glue Schema Registry, which has a different message format): change the
-  serializer/deserializer classes and registry settings in `application.yml` and the dependency in `pom.xml`. The
-  dead-letter publisher follows `spring.kafka.producer.value-serializer`. Not tried with Glue yet.
+Expect `features: 1` and `scenarios: 4 | passed: 4 | failed: 0`. Use `classpath:karate/orders-e2e.feature` for the
+other one (5 scenarios). Filtering by scenario name with `--name` did **not** work in our setup; pick a feature file.
 
-## Build notes
-- The Confluent Avro serializer is published only on `https://packages.confluent.io/maven/` (declared in `pom.xml`); a
-  network that blocks that host cannot resolve dependencies.
-- `commons-compress` is pinned in `pom.xml` because the version Avro pulls in breaks Testcontainers.
-- Tests that start their own Spring context get their own database (random name), because each embedded Kafka broker
-  restarts offsets at 0 and the idempotency keys would otherwise collide across contexts.
+## Step 6: Make a test fail on purpose
+
+A test you have never seen fail is a test you cannot trust. Break one:
+
+1. Open `src/test/resources/karate/kafka-consumer.feature`.
+2. In the first scenario, change `amount: 10.5` to `amount: 99` (it is on the `match calls[0].body contains` line).
+3. Run it again:
+   ```bash
+   mvn test -Dtest=KarateTest -Dkarate.options="classpath:karate/kafka-consumer.feature"
+   ```
+4. Expect `scenarios: 4 | passed: 3 | failed: 1` and `BUILD FAILURE`, with a message like:
+   ```
+   match failed: CONTAINS
+     $ | actual does not contain expected | ... expected has un-matched keys - [amount]
+     {"orderId":"karate-...","customer":"bob","amount":10.5,"currency":"USD"}
+   ```
+   Karate prints the **actual** event (`"amount":10.5`) next to what you expected.
+5. Undo your change:
+   ```bash
+   git checkout -- src/test/resources/karate/kafka-consumer.feature
+   ```
+
+## Step 7: Write your own scenario
+
+1. Create `src/test/resources/karate/my-first.feature` with this content:
+   ```gherkin
+   Feature: My first scenario
+
+     Background:
+       * def Kafka = Java.type('com.sunkafka.karate.KafkaSupport')
+       * def Linking = Java.type('com.sunkafka.support.LinkingStub')
+       * eval Linking.reset()
+       * url baseUrl
+
+     Scenario: A large order is accepted, published to Kafka and linked once
+       * def id = 'my-first-' + java.util.UUID.randomUUID()
+       Given path 'api/orders'
+       And request { orderId: '#(id)', customer: 'me', amount: 1234.5 }
+       When method post
+       Then status 202
+       * def calls = Kafka.awaitLinkingCalls(id, 1, 15)
+       * match calls == '#[1]'
+       * match calls[0].body.amount == 1234.5
+   ```
+2. Run only your file:
+   ```bash
+   mvn test -Dtest=KarateTest -Dkarate.options="classpath:karate/my-first.feature"
+   ```
+3. Expect `features: 1` and `scenarios: 1 | passed: 1 | failed: 0`.
+
+What the lines do: the `Background` loads the two helpers, resets the fake linking service and sets the app's address
+(`baseUrl`). The `Given ... Then status 202` lines are a normal HTTP call. `Kafka.awaitLinkingCalls(id, 1, 15)` waits up
+to 15 seconds for 1 call to reach the linking service and returns it, and the two `match` lines check it.
+
+Things to try next (change, run, observe):
+- Change `status 202` to `status 200` and watch it fail.
+- Add `* eval Linking.failWith(id, 503)` before `Given path` and change the expected calls to 3: the order is now retried.
+- Post `amount: -1` and expect `status 400`.
+
+## Step 8: Run everything
+
+```bash
+mvn test
+```
+
+Expect `Tests run: 53, Failures: 0, Errors: 0, Skipped: 3` and `BUILD SUCCESS` (about a minute). The 3 skipped tests need
+Docker (real Kafka and Postgres containers) and skip themselves without it.
+
+This also runs the repository's **Cucumber** suite, which tests the same behaviour from the inside, with a Java step
+definition for every phrase. To run only that: `mvn test -Dtest=CucumberTest` (14 scenarios, report at
+`target/cucumber-reports/report.html`). Karate is Cucumber-style but has its own engine; the two are kept side by side so
+you can compare them. See the guide below.
+
+---
+
+## Cheat sheet
+
+Helpers available inside any feature (put the `Background` from step 7 at the top):
+
+| Call | What it does |
+|---|---|
+| `Kafka.publish(orderId, customer, amount, currency)` | Publish an Avro order to Kafka (`currency` may be `null`) |
+| `Kafka.publishRaw(key, text)` | Publish a message that is not valid Avro |
+| `Kafka.readEvents('orders', key, seconds)` | Read the events on a topic for one key |
+| `Kafka.awaitLinkingCalls(orderId, count, seconds)` | Wait for calls to the linking service, then list them |
+| `Kafka.awaitDeadLetters(text, count, seconds)` | Wait for records on the dead-letter topic |
+| `Linking.failWith(id, 503)` | Make the linking service answer 503 for that order |
+| `Linking.failThenSucceed(id, 503, 1)` | Fail once, then succeed |
+| `Linking.delay(id, 1500)` | Answer after 1.5 seconds (test timeout is 0.5 s) |
+| `Linking.reset()` | Everything succeeds again |
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `"baseUrl" is not defined` | `karate-config.js` must sit in `src/test/resources/` (not in the `karate/` folder) |
+| `release version 21 not supported` or similar | Your JDK is older than 21. Install JDK 21 and check `java -version` |
+| Cannot download dependencies (mentions `packages.confluent.io`) | Your network blocks that site. The Avro serializer is only published there |
+| Lots of `ERROR` lines but `BUILD SUCCESS` | Normal: deliberate retries. Trust the last lines (step 2) |
+| `--name` runs more scenarios than expected | Known: select by feature file instead (step 5) |
+| A scenario fails only sometimes | Run it again and open the report. Scenarios must not run in parallel (they share one fake linking service) |
+
+## Limits of this proof of concept
+
+- Runs on an **embedded** Kafka broker and in-memory registry and database. It has not been run through Karate against
+  real Kafka or a deployed environment (the repo's Docker-based JUnit tests cover real Kafka in CI).
+- Proving that something was *not* published means waiting out a short window (2 seconds), so those scenarios are slower.
+- Karate's Kafka access is hand-written (`KafkaSupport.java`), which is the main cost of choosing Karate here.
+
+## Read more
+
+| Document | What it covers |
+|---|---|
+| [docs/KARATE-GUIDE.md](docs/KARATE-GUIDE.md) | Writing scenarios, every helper in detail, Karate versus Cucumber |
+| [docs/KARATE-POC-RESULTS.md](docs/KARATE-POC-RESULTS.md) | Measured results: timings, repeated runs, deliberate-breakage checks, findings |
+| [docs/PROJECT-OVERVIEW.md](docs/PROJECT-OVERVIEW.md) | The application being tested and every other test layer (JUnit, Cucumber, Docker) |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/DECISIONS.md](docs/DECISIONS.md) | Requirement status and design decisions |
