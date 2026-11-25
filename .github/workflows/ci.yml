@@ -31,5 +31,6 @@ jobs:
           name: reports
           path: |
             target/cucumber-reports/
+            target/karate-reports/
             target/site/jacoco/
           if-no-files-found: ignore

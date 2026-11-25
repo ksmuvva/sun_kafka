@@ -82,6 +82,7 @@ code runs in every layer; only what sits underneath changes.
 | `HealthTest` | health and readiness UP with `kafka` and `db`; Kafka indicator DOWN when unreachable |
 | `SchemaRegistryTest` | subject `orders-value` registered; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
 | `bdd/CucumberTest` | 14 Gherkin scenarios (see below) |
+| `karate/KarateTest` | Karate proof of concept: 9 scenarios against the running app (see below) |
 | `KafkaContainerTest`, `PostgresMigrationTest` | the same behaviour on real Kafka, Schema Registry and Postgres |
 
 ```bash
@@ -101,6 +102,23 @@ Scenarios in `src/test/resources/features/*.feature`, step code in `src/test/jav
 | `schema_evolution` | subject registered; currency defaults to USD; compatible change accepted / breaking change rejected |
 
 Run a subset by tag, e.g. `mvn test -Dtest=CucumberTest -Dcucumber.filter.tags=@smoke`.
+
+## Karate (proof of concept)
+[Karate](https://github.com/karatelabs/karate) is an API-testing framework with Gherkin-like syntax. This PoC shows it can
+validate the Kafka integration and the full event flow. `KarateTest` starts the real application on a random HTTP port
+(with the same embedded Kafka, in-memory registry and database as the other tests), then runs every feature in
+`src/test/resources/karate/`. `mvn test` runs it; the report is `target/karate-reports/karate-summary.html`.
+
+| Feature | What it shows |
+|---|---|
+| `orders-e2e.feature` | `POST /api/orders` -> event appears on Kafka (Avro, default currency applied) -> consumer calls the linking service exactly once with an idempotency key; health is UP; invalid orders get 400 and never reach Kafka (a data table of cases) |
+| `kafka-consumer.feature` | Karate acts as the upstream producer: publishes straight to Kafka, then checks linking calls; 503 retried 3 times then dead-lettered; 400 dead-lettered without retry; a malformed message is dead-lettered and does not block the next order |
+
+Karate has no built-in Kafka support, so features call a small Java helper (`karate/KafkaSupport`) through Java
+interop: `* def Kafka = Java.type('com.sunkafka.karate.KafkaSupport')`. It can publish Avro or raw bytes, read events
+from a topic, read the dead-letter topic and list the calls the fake linking service received. Scenarios run on one thread
+because they share that fake linking service. Karate and the Cucumber layer overlap on purpose here: this is for the team
+to compare the two, not a commitment to keep both.
 
 ## Run the app against local services
 ```bash
