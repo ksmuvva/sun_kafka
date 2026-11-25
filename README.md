@@ -82,6 +82,7 @@ code runs in every layer; only what sits underneath changes.
 | `HealthTest` | health and readiness UP with `kafka` and `db`; Kafka indicator DOWN when unreachable |
 | `SchemaRegistryTest` | subject `orders-value` registered; `currency` defaults to `USD`; compatible change accepted, breaking change rejected |
 | `bdd/CucumberTest` | 14 Gherkin scenarios (see below) |
+| `karate/KarateTest` | Karate proof of concept: 9 scenarios against the running app (see below) |
 | `KafkaContainerTest`, `PostgresMigrationTest` | the same behaviour on real Kafka, Schema Registry and Postgres |
 
 ```bash
@@ -102,6 +103,23 @@ Scenarios in `src/test/resources/features/*.feature`, step code in `src/test/jav
 
 Run a subset by tag, e.g. `mvn test -Dtest=CucumberTest -Dcucumber.filter.tags=@smoke`.
 
+## Karate (proof of concept)
+[Karate](https://github.com/karatelabs/karate) is an API-testing framework with Gherkin-like syntax. This PoC shows it can
+validate the Kafka integration and the full event flow. `KarateTest` starts the real application on a random HTTP port
+(with the same embedded Kafka, in-memory registry and database as the other tests), then runs every feature in
+`src/test/resources/karate/`. `mvn test` runs it; the report is `target/karate-reports/karate-summary.html`.
+
+| Feature | What it shows |
+|---|---|
+| `orders-e2e.feature` | `POST /api/orders` -> event appears on Kafka (Avro, default currency applied) -> consumer calls the linking service exactly once with an idempotency key; health is UP; invalid orders get 400 and never reach Kafka (a data table of cases) |
+| `kafka-consumer.feature` | Karate acts as the upstream producer: publishes straight to Kafka, then checks linking calls; 503 retried 3 times then dead-lettered; 400 dead-lettered without retry; a malformed message is dead-lettered and does not block the next order |
+
+Karate has no built-in Kafka support, so features call a small Java helper (`karate/KafkaSupport`) through Java
+interop: `* def Kafka = Java.type('com.sunkafka.karate.KafkaSupport')`. It can publish Avro or raw bytes, read events
+from a topic, read the dead-letter topic and list the calls the fake linking service received. Scenarios run on one thread
+because they share that fake linking service. Karate and the Cucumber layer overlap on purpose here: this is for the team
+to compare the two, not a commitment to keep both.
+
 ## Run the app against local services
 ```bash
 docker compose up -d          # Kafka :9092, Schema Registry :8081, Postgres :5432  (or: podman compose up -d)
@@ -118,6 +136,19 @@ mvn spring-boot:run
 and nothing has been run under Podman. For Podman, expect to need: `unqualified-search-registries = ["docker.io"]` in
 `registries.conf` (short image names), and for Testcontainers `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
 and `TESTCONTAINERS_RYUK_DISABLED=true`.
+
+## Developer tooling for Claude Code (optional)
+Configured in `.claude/settings.json` and `CLAUDE.md`. Both are third-party; nothing here is needed to build or test.
+
+| Tool | What it does | What you need to know |
+|---|---|---|
+| [Ponytail](https://github.com/DietrichGebert/ponytail) plugin | Nudges the coding agent toward the simplest solution (no unrequested abstractions) | Claude Code offers the plugin when you open the repo and trust it. Needs `node` on `PATH` (its hooks are Node scripts). It writes a local task ledger to `~/.config/ponytail/`; its optional webhook is empty by default, so nothing leaves your machine. Manual install: `/plugin marketplace add DietrichGebert/ponytail`, then `/plugin install ponytail@ponytail` |
+| [Graphify](https://pypi.org/project/graphifyy/) | Builds a knowledge graph of the code so the agent can run `graphify query/path/explain` instead of grepping | `pip install graphifyy` (Python 3.11.5+), then `graphify update .`. That command is **code-only and local** (tree-sitter, no LLM, no network). The graph lands in `graphify-out/` (git-ignored, about 1 MB, rewritten on every build). The `/graphify` skill's *document* extraction does send file contents to an LLM API, so only use it deliberately |
+
+The graphify hooks in `.claude/settings.json` do nothing unless `graphify` is installed **and** `graphify-out/graph.json`
+exists; they only print hints before searches. To remove graphify: `graphify uninstall`, then delete its entries from
+`.claude/settings.json` and the section in `CLAUDE.md`. To drop Ponytail: remove the two `ponytail` entries from
+`.claude/settings.json`.
 
 ## Extending the framework
 - **New scenario**: write it in a `.feature` file; add any missing step in `bdd/*Steps.java`.
