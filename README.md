@@ -30,6 +30,29 @@ fail on purpose (6), write your own (7), and run everything (8). About 15 minute
 Not needed: Docker, Kafka, a database, any open port (everything uses random ports). Tested on Linux with Java 21.0.13 and
 Maven 3.9.11; macOS and Windows were not tested.
 
+### Windows: one-click option (experimental)
+
+> **Not yet tested on Windows.** It was written and checked on Linux only. If it misbehaves, the manual steps below
+> always work.
+
+1. Get the code: on the GitHub page click **Code, Download ZIP** and extract it (or use step 1 below).
+2. Double-click **`run-karate.cmd`** in the extracted folder.
+
+It checks Java 21, Maven 3.9+, Git and internet access, **offers to install anything missing (it asks first)**, runs the
+Karate tests, prints **PASS** or **FAIL** with the scenario counts, and opens the report. The same thing in PowerShell:
+
+```powershell
+.\scripts\run-karate.ps1                          # check, run all Karate scenarios, open the report
+.\scripts\run-karate.ps1 -Feature kafka-consumer  # one feature (or your own, e.g. my-first)
+.\scripts\run-karate.ps1 -CheckOnly               # only check the prerequisites
+.\scripts\run-karate.ps1 -Everything              # run every test (Karate, Cucumber, JUnit)
+```
+Other options: `-InstallMissing` (offer installs; the `.cmd` always adds it), `-Yes` (answer yes to installs),
+`-NoReport`, `-ShowLog` (full Maven output). Exit code: 0 passed, 1 failed, 2 a required tool is missing. Java and Git are
+installed with `winget`; Maven is downloaded as a portable copy (checksum-verified) to `%LOCALAPPDATA%\Karate_kafka\tools`,
+no admin rights needed. If PowerShell says scripts are disabled, use `run-karate.cmd`: it relaxes that for one run only.
+The full log is saved to `target\karate-run.log`.
+
 ---
 
 ## Step 1: Get the code
@@ -123,6 +146,7 @@ A test you have never seen fail is a test you cannot trust. Break one:
    ```bash
    git checkout -- src/test/resources/karate/kafka-consumer.feature
    ```
+   (Downloaded the ZIP, so no Git? Change `amount: 99` back to `amount: 10.5` by hand.)
 
 ## Step 7: Write your own scenario
 
