@@ -38,3 +38,15 @@ database name per context.
 Serializer classes and the registry URL are in `application.yml`; the dead-letter publisher reuses the configured value
 serializer. Moving to AWS Glue Schema Registry (a different message format) should need a dependency and configuration
 change, not code changes. Not tried (Q4).
+
+## D8. Karate is a proof of concept next to Cucumber, not a replacement
+Karate drives the running app over HTTP and talks to Kafka through one small Java helper (`KafkaSupport`), because it has
+no built-in Kafka support. Cucumber (Gherkin + Java steps) tests the same behaviour from inside the application. Both stay
+for now so the team can compare them. **Revisit:** keep the one that the team finds easier to write and review, and delete
+the other.
+
+## D9. Developer tooling is committed as configuration only, and is opt-in in practice
+Ponytail (plugin) and graphify (code knowledge graph) are declared in `.claude/settings.json` and `CLAUDE.md`. The graph
+itself is not committed (about 1 MB, rewritten whole on every build). The graphify hooks call `graphify` from `PATH` and
+silently do nothing when it is missing or no graph exists, so contributors who do not use them are unaffected. Absolute
+paths are avoided on purpose: graphify's own installer writes the path of whichever virtualenv ran it.
