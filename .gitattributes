@@ -1,3 +1,6 @@
 # Windows script files need CRLF line endings.
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+# macOS/Linux shell scripts must keep LF line endings (CRLF breaks them).
+*.sh text eol=lf
+*.command text eol=lf
