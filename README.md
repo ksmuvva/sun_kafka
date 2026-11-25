@@ -211,7 +211,7 @@ Helpers available inside any feature (put the `Background` from step 7 at the to
 - Proving that something was *not* published means waiting out a short window (2 seconds), so those scenarios are slower.
 - Karate's Kafka access is hand-written (`KafkaSupport.java`), which is the main cost of choosing Karate here.
 
-## Read more
+
 
 | Document | What it covers |
 |---|---|
