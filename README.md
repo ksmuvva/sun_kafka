@@ -4,6 +4,8 @@ End-to-end test framework for Kafka messaging: a **publisher** and a **consumer*
 built with Spring Boot + Spring Kafka (Java 17, Maven). Messages are **Avro**, validated by **Confluent Schema Registry**.
 Tests run on an embedded broker (no Docker) and on real Kafka + Schema Registry containers (Testcontainers).
 
+Requirements and gaps against the project scope: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
+
 ## How it works
 
 ### 1. The happy path
