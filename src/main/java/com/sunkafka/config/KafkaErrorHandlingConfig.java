@@ -1,5 +1,7 @@
 package com.sunkafka.config;
 
+import com.sunkafka.consumer.InvalidOrderException;
+import com.sunkafka.linking.LinkingPermanentException;
 import com.sunkafka.model.OrderEvent;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.util.Map;
@@ -22,6 +24,7 @@ import org.springframework.util.backoff.FixedBackOff;
 
 /**
  * Failed records are retried (2 retries, 200ms apart) and then published to {@code <topic>.DLT}
+ * (invalid orders and permanent linking rejections are not retried)
  * on the same partition. Undeserializable "poison pills" skip retries and go straight to the DLT.
  * Spring Boot wires the {@link DefaultErrorHandler} bean into the listener container factory.
  */
@@ -52,6 +55,9 @@ public class KafkaErrorHandlingConfig {
                 new DelegatingByTypeSerializer(delegates, true));
         var recoverer = new DeadLetterPublishingRecoverer(new KafkaTemplate<>(factory),
                 (record, ex) -> new TopicPartition(record.topic() + DLT_SUFFIX, record.partition()));
-        return new DefaultErrorHandler(recoverer, new FixedBackOff(200L, 2L));
+        var handler = new DefaultErrorHandler(recoverer, new FixedBackOff(200L, 2L));
+        // Retrying cannot fix these: send them straight to the dead-letter topic.
+        handler.addNotRetryableExceptions(InvalidOrderException.class, LinkingPermanentException.class);
+        return handler;
     }
 }

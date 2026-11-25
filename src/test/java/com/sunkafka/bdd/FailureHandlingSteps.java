@@ -21,7 +21,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.test.EmbeddedKafkaBroker;
 
 public class FailureHandlingSteps {
 
@@ -29,7 +29,9 @@ public class FailureHandlingSteps {
 
     @Autowired OrderProducer producer;
     @Autowired OrderConsumer consumer;
-    @Value("${spring.embedded.kafka.brokers}") String brokers;
+    // this context's own broker (the system property is JVM-wide and may belong to another Spring context)
+    @Autowired EmbeddedKafkaBroker embeddedKafka;
+    private String brokers;
 
     private TopicReader deadLetters;
     private OrderEvent invalidOrder;
@@ -37,6 +39,7 @@ public class FailureHandlingSteps {
 
     @Before
     public void setUp() {
+        brokers = embeddedKafka.getBrokersAsString();
         consumer.reset();
         deadLetters = new TopicReader(brokers, "orders.DLT");
     }
@@ -63,9 +66,9 @@ public class FailureHandlingSteps {
         assertThat(records.get(0).headers().lastHeader("kafka_dlt-exception-fqcn")).isNotNull();
     }
 
-    @And("the listener tried it {int} times")
+    @And("the listener tried it {int} time(s)")
     public void listenerAttempts(int attempts) {
-        // 1 initial delivery + 2 retries
+        // validation failures are never retried
         assertThat(consumer.attemptsFor(invalidOrder.getOrderId())).isEqualTo(attempts);
     }
 
