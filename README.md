@@ -32,8 +32,7 @@ Maven 3.9.11; macOS and Windows were not tested.
 
 ### Windows: one-click option (experimental)
 
-> **Not yet tested on Windows.** It was written and checked on Linux only. If it misbehaves, the manual steps below
-> always work.
+
 
 1. Get the code: on the GitHub page click **Code, Download ZIP** and extract it (or use step 1 below).
 2. Double-click **`run-karate.cmd`** in the extracted folder.
