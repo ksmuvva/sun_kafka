@@ -1,4 +1,4 @@
-# sun_kafka
+# Karate_kafka
 
 End-to-end test framework for a service that **consumes orders from Kafka and calls the  linking service**.
 Built with Spring Boot + Spring Kafka (Java 21, Maven). Messages are **Avro** checked by **Schema Registry**; processed
