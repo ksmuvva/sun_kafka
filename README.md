@@ -52,6 +52,33 @@ installed with `winget`; Maven is downloaded as a portable copy (checksum-verifi
 no admin rights needed. If PowerShell says scripts are disabled, use `run-karate.cmd`: it relaxes that for one run only.
 The full log is saved to `target\karate-run.log`.
 
+### macOS: one-click option (experimental)
+
+> **Tested on Linux only, not yet on a Mac.** The checks, the install logic and the Karate run were exercised on Linux;
+> the Mac-specific parts (Homebrew, Apple's Command Line Tools, opening the report) were not. If it misbehaves, the
+> manual steps below always work.
+
+1. Get the code: on the GitHub page click **Code, Download ZIP** and unzip it (or use step 1 below).
+2. Double-click **`run-karate.command`**. The first time, macOS may refuse to open a downloaded file: right-click it,
+   choose **Open**, then **Open** again. (If you see "permission denied", run `chmod +x run-karate.command` once.)
+
+Prefer Terminal? `bash scripts/run-karate.sh` does the same and always works. It checks Java 21, Maven 3.9+, Git and
+internet access, **offers to install anything missing (it asks first)**, runs the Karate tests, prints **PASS** or
+**FAIL** with the scenario counts, and opens the report:
+
+```bash
+bash scripts/run-karate.sh                          # check, run all Karate scenarios, open the report
+bash scripts/run-karate.sh --feature kafka-consumer # one feature (or your own, e.g. my-first)
+bash scripts/run-karate.sh --check-only             # only check the prerequisites
+bash scripts/run-karate.sh --everything             # run every test (Karate, Cucumber, JUnit)
+```
+Other options: `--install-missing` (offer installs; the `.command` file always adds it), `--yes` (answer yes to installs),
+`--no-report`, `--show-log` (full Maven output), `--help`. Exit code: 0 passed, 1 failed, 2 a required tool is missing.
+What it can install: Java 21 with Homebrew (`brew install openjdk@21`; if Homebrew is missing it tells you how to get it
+from https://brew.sh, it does not install Homebrew for you), Maven as a portable copy (checksum-verified) in
+`~/.karate_kafka/tools` with no admin rights, and Git through Apple's Command Line Tools (a window opens; run the script
+again when it finishes). The full log is saved to `target/karate-run.log`.
+
 ---
 
 ## Step 1: Get the code
