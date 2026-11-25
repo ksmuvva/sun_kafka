@@ -11,21 +11,25 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
           cache: maven
       # Docker is available on ubuntu-latest, so the Testcontainers test runs against a real broker.
       - run: mvn -B verify
-      # The real-broker test self-skips when Docker is unusable; do not let that pass silently in CI.
-      - name: Fail if the real-broker test was skipped
+      # The Docker-based tests self-skip when Docker is unusable; do not let that pass silently in CI.
+      - name: Fail if a Docker-based test was skipped
         run: |
-          if grep -q '<skipped' target/surefire-reports/TEST-com.sunkafka.KafkaContainerTest.xml; then
-            echo "::error::KafkaContainerTest was skipped (Docker not usable by Testcontainers)"
-            exit 1
-          fi
-      - name: Upload Cucumber report
+          for t in KafkaContainerTest PostgresMigrationTest; do
+            if grep -q '<skipped' "target/surefire-reports/TEST-com.sunkafka.$t.xml"; then
+              echo "::error::$t was skipped (Docker not usable by Testcontainers)"
+              exit 1
+            fi
+          done
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cucumber-report
-          path: target/cucumber-reports/
+          name: reports
+          path: |
+            target/cucumber-reports/
+            target/site/jacoco/
           if-no-files-found: ignore

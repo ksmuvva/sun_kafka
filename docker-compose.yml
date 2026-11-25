@@ -1,6 +1,8 @@
-# Local single-node Kafka (KRaft) + Schema Registry. Start with: docker compose up -d
+# Local single-node Kafka (KRaft) + Schema Registry + Postgres.
+# Start with:  docker compose up -d   (or: podman compose up -d)
 #   Kafka for apps on your machine:  localhost:9092
 #   Schema Registry:                 http://localhost:8081
+#   Postgres:                        localhost:5432  (database/user/password: sunkafka, local use only)
 services:
   kafka:
     image: apache/kafka:3.8.0
@@ -32,3 +34,13 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sun-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: sunkafka
+      POSTGRES_USER: sunkafka
+      POSTGRES_PASSWORD: sunkafka
