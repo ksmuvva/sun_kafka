@@ -137,13 +137,6 @@ and nothing has been run under Podman. For Podman, expect to need: `unqualified-
 `registries.conf` (short image names), and for Testcontainers `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
 and `TESTCONTAINERS_RYUK_DISABLED=true`.
 
-## Developer tooling for Claude Code (optional)
-Configured in `.claude/settings.json` and `CLAUDE.md`. Both are third-party; nothing here is needed to build or test.
-
-| Tool | What it does | What you need to know |
-|---|---|---|
-| [Ponytail](https://github.com/DietrichGebert/ponytail) plugin | Nudges the coding agent toward the simplest solution (no unrequested abstractions) | Claude Code offers the plugin when you open the repo and trust it. Needs `node` on `PATH` (its hooks are Node scripts). It writes a local task ledger to `~/.config/ponytail/`; its optional webhook is empty by default, so nothing leaves your machine. Manual install: `/plugin marketplace add DietrichGebert/ponytail`, then `/plugin install ponytail@ponytail` |
-| [Graphify](https://pypi.org/project/graphifyy/) | Builds a knowledge graph of the code so the agent can run `graphify query/path/explain` instead of grepping | `pip install graphifyy` (Python 3.11.5+), then `graphify update .`. That command is **code-only and local** (tree-sitter, no LLM, no network). The graph lands in `graphify-out/` (git-ignored, about 1 MB, rewritten on every build). The `/graphify` skill's *document* extraction does send file contents to an LLM API, so only use it deliberately |
 
 The graphify hooks in `.claude/settings.json` do nothing unless `graphify` is installed **and** `graphify-out/graph.json`
 exists; they only print hints before searches. To remove graphify: `graphify uninstall`, then delete its entries from
