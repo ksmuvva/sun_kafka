@@ -19,7 +19,7 @@
     <testcontainers.version>1.21.4</testcontainers.version>
     <confluent.version>7.6.1</confluent.version>
     <avro.version>1.11.3</avro.version>
-    <cucumber.version>7.18.1</cucumber.version>
+    <cucumber.version>8.1.0</cucumber.version>
     <karate.version>1.4.1</karate.version>
   </properties>
   <dependencyManagement>
